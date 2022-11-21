@@ -20,6 +20,13 @@
     </properties>
 
 	<dependencies>
+
+        <!-- FTA add https://github.com/MicrosoftLearning/Deploying-and-Running-Java-Applications-in-Azure-Spring-Apps/blob/master/Instructions/Labs/LAB_04_secure_secrets_asc.md -->
+        <dependency>
+           <groupId>com.azure.spring</groupId>
+           <artifactId>spring-cloud-azure-starter-keyvault-secrets</artifactId>
+        </dependency>
+        
         <!-- Spring Boot -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
