@@ -3,7 +3,9 @@ deploy/*
 cnf/*
 
 # Maven
-target/
+target
+target/*
+target/classes/*/*
 !.mvn/wrapper/maven-wrapper.jar
 
 # Compiled class file
