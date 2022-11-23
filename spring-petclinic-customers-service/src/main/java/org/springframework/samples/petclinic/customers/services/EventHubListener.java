@@ -10,7 +10,7 @@ public class EventHubListener {
 
    private static final Logger log = LoggerFactory.getLogger(EventHubListener.class);
 
-   @KafkaListener(topics = "telemetry", groupId = "$Default")
+   @KafkaListener(topics = "evh-telemetry", groupId = "$Default")
      public void receive(String in) {
         log.info("Received message from kafka queue: {}",in);
         System.out.println(in);
