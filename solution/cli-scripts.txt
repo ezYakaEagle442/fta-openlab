@@ -1,0 +1,740 @@
+
+
+https://github.com/microsoft/CloudAdoptionFramework/tree/master/ready/AzNamingTool
+https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-abbreviations?source=recommendations
+
+
+
+
+GH_PAT_FTA_CFG=XXXXX
+GIT_REPO=https://github.com/ezYakaEagle442/fta-openlab-cfg
+GIT_USERNAME=ezYakaEagle442
+
+SPRING_APPS_SERVICE=asa-petcliniclab$UNIQUEID
+RESOURCE_GROUP=rg-petclinic-$UNIQUEID
+LOCATION=westeurope
+
+az group create -g $RESOURCE_GROUP -l $LOCATION
+
+az extension add --name spring
+
+SPRING_APPS_SERVICE=$SPRING_APPS_SERVICE
+az spring create --name $SPRING_APPS_SERVICE \
+                 --resource-group $RESOURCE_GROUP \
+                 --location $LOCATION \
+                 --sku Standard
+
+az config set defaults.group=$RESOURCE_GROUP defaults.spring=$SPRING_APPS_SERVICE
+
+az spring config-server git set \
+                        --name $SPRING_APPS_SERVICE \
+                        --resource-group $RESOURCE_GROUP \
+                        --uri $GIT_REPO \
+                        --label main \
+                        --password $GH_PAT_FTA_CFG \
+                        --username $GIT_USERNAME 
+						
+
+SQL_SERVER_NAME=springappsmysql$UNIQUEID
+SQL_ADMIN_PASSWORD=XXX
+DATABASE_NAME=petclinic
+
+az mysql server create \
+      --admin-user myadmin \
+      --admin-password ${SQL_ADMIN_PASSWORD} \
+      --name ${SQL_SERVER_NAME} \
+      --resource-group ${RESOURCE_GROUP}  \
+      --sku-name GP_Gen5_2  \
+      --version 5.7 \
+      --storage-size 5120
+
+
+az mysql db create \
+      --server-name $SQL_SERVER_NAME \
+      --resource-group $RESOURCE_GROUP \
+      --name $DATABASE_NAME
+
+az mysql server firewall-rule create \
+    --name myLocalDevStation \
+    --server ${SQL_SERVER_NAME} \
+    --resource-group ${RESOURCE_GROUP} \
+    --start-ip-address 176.134.171.92 --end-ip-address 176.134.171.92
+	
+az mysql server firewall-rule create \
+    --name allAzureIPs \
+    --server ${SQL_SERVER_NAME} \
+    --resource-group ${RESOURCE_GROUP} \
+    --start-ip-address 0.0.0.0 --end-ip-address 0.0.0.0
+	
+spring:
+  config:
+    activate:
+      on-profile: mysql
+  datasource:
+    schema: classpath*:db/mysql/schema.sql
+    data: classpath*:db/mysql/data.sql
+    url: jdbc:mysql://springappsmysqlba72d8.mysql.database.azure.com:3306/petclinic?useSSL=true
+    username: myadmin@springappsmysqlba72d8
+    password: XXX    
+    initialization-mode: ALWAYS
+
+
+az spring app-insights show \
+   -g $R>     -g $RESOURCE_GROUP \
+  -n $SPRING_APPS_SERVICE>     -n $SPRING_APPS_SERVICE
+
+
+
+INSTRUMENTATIONKEY=$(az monitor app-insights component show \
+    -g $RESOURCE_GROUP \
+    --query [0].connectionString \
+    -o tsv)
+
+
+
+az monitor diagnostic-settings categories list \
+    --resource $SPRING_APPS_SERVICE \
+    -g $RESOURCE_GROUP \
+    --resource-type Microsoft.AppPlatform/Spring \
+    --query value[].name
+
+
+WORKSPACE=springappsworkspace$UNIQUEID
+az monitor log-analytics workspace create \
+    --resource-group $RESOURCE_GROUP \
+    --workspace-name $WORKSPACE
+
+az monitor diagnostic-settings create \
+    --name springappslogs \
+    --resource $SPRING_APPS_SERVICE \
+    --resource-type Microsoft.AppPlatform/Spring \
+    --resource-group $RESOURCE_GROUP \
+    --workspace $WORKSPACE \
+    --logs @logs.json \
+    --metrics @metrics.json
+
+
+KEYVAULT_NAME=springappskv$UNIQUEID
+az keyvault create \
+    --name $KEYVAULT_NAME \
+    --resource-group $RESOURCE_GROUP \
+    --location $LOCATION \
+    --sku standard
+
+https://learn.microsoft.com/en-us/azure/spring-apps/tutorial-managed-identities-key-vault?tabs=system-assigned-managed-identity
+https://docs.spring.io/spring-boot/docs/2.7.3/reference/html/application-properties.html#application-properties.data.spring.datasource.username
+
+https://microsoft.github.io/spring-cloud-azure/current/reference/html/index.html#configuration-properties
+https://microsoft.github.io/spring-cloud-azure/current/reference/html/index.html#special-characters-in-property-name
+
+
+
+az spring app identity assign \
+    --service $SPRING_APPS_SERVICE \
+    --resource-group $RESOURCE_GROUP \
+    --name customers-service \
+    --system-assigned
+
+az spring app identity assign \
+    --service $SPRING_APPS_SERVICE \
+    --resource-group $RESOURCE_GROUP \
+    --name visits-service \
+    --system-assigned
+
+az spring app identity assign \
+    --service $SPRING_APPS_SERVICE \
+    --resource-group $RESOURCE_GROUP \
+    --name vets-service \
+    --system-assigned
+
+
+
+CUSTOMERS_SERVICE_ID=$(az spring app identity show \
+    --service $SPRING_APPS_SERVICE \
+    --resource-group $RESOURCE_GROUP \
+    --name customers-service \
+    --output tsv \
+    --query principalId)
+
+VETS_SERVICE_ID=$(az spring app identity show \
+    --service $SPRING_APPS_SERVICE \
+    --resource-group $RESOURCE_GROUP \
+    --name vets-service \
+    --output tsv \
+    --query principalId)
+
+VISITS_SERVICE_ID=$(az spring app identity show \
+    --service $SPRING_APPS_SERVICE \
+    --resource-group $RESOURCE_GROUP \
+    --name visits-service \
+    --output tsv \
+    --query principalId)
+
+
+
+az keyvault set-policy \
+    --name $KEYVAULT_NAME \
+    --resource-group $RESOURCE_GROUP \
+    --secret-permissions get list  \
+    --object-id $CUSTOMERS_SERVICE_ID
+
+az keyvault set-policy \
+    --name $KEYVAULT_NAME \
+    --resource-group $RESOURCE_GROUP \
+    --secret-permissions get list  \
+    --object-id $VETS_SERVICE_ID
+
+az keyvault set-policy \
+    --name $KEYVAULT_NAME \
+    --resource-group $RESOURCE_GROUP \
+    --secret-permissions get list  \
+    --object-id $VISITS_SERVICE_ID
+
+
+
+mvn clean package -DskipTests
+
+
+az spring app deploy \
+         --service $SPRING_APPS_SERVICE \
+         --resource-group $RESOURCE_GROUP \
+         --name customers-service \
+         --no-wait \
+         --artifact-path spring-petclinic-customers-service/target/spring-petclinic-customers-service-2.6.11.jar \
+         --env SPRING_PROFILES_ACTIVE=mysql
+
+az spring app deploy \
+            --service $SPRING_APPS_SERVICE \
+            --resource-group $RESOURCE_GROUP \
+            --name visits-service \
+            --no-wait \
+            --artifact-path spring-petclinic-visits-service/target/spring-petclinic-visits-service-2.6.11.jar \
+            --env SPRING_PROFILES_ACTIVE=mysql
+
+az spring app deploy \
+            --service $SPRING_APPS_SERVICE \
+            --resource-group $RESOURCE_GROUP \
+            --name vets-service \
+            --no-wait \
+            --artifact-path spring-petclinic-vets-service/target/spring-petclinic-vets-service-2.6.11.jar \
+            --env SPRING_PROFILES_ACTIVE=mysql
+
+
+https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-quickstart-cli
+Make sure to create the Service Bus namespace with the Premium SKU, since this is required in order to support JMS 2.0 messaging
+SERVICEBUS_NAMESPACE=sb-petclinic
+SERVICE_BUS_QUEUE_NAME=sbq-petclinic
+SERVICE_BUS_TOPIC_NAME=sbt-petclinic
+
+az servicebus namespace create --name $SERVICEBUS_NAMESPACE -g $RESOURCE_GROUP  --location $LOCATION --sku Premium
+
+az servicebus queue create \
+    --resource-group $RESOURCE_GROUP \
+    --namespace-name $SERVICEBUS_NAMESPACE \
+    --name visits-requests
+
+az servicebus queue create \
+    --resource-group $RESOURCE_GROUP \
+    --namespace-name $SERVICEBUS_NAMESPACE \
+    --name visits-confirmations
+
+
+SERVICEBUS_CONNECTIONSTRING=$(az servicebus namespace authorization-rule keys list \
+    --resource-group $RESOURCE_GROUP \
+    --namespace-name $SERVICEBUS_NAMESPACE \
+    --name RootManageSharedAccessKey \
+    --query primaryConnectionString \
+    --output tsv)
+
+
+az keyvault secret set \
+    --name SPRING-JMS-SERVICEBUS-CONNECTIONSTRING \
+    --value $SERVICEBUS_CONNECTIONSTRING \
+    --vault-name $KEYVAULT_NAME
+
+
+https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-tutorial-topics-subscriptions-cli
+
+
+In the Lab repository Extra folder, the messaging-emulator microservice is already prepared to send messages to an Azure Service Bus namespace.
+
+
+mvn clean package -DskipTests
+
+az spring app create --service $SPRING_APPS_SERVICE \
+    --resource-group $RESOURCE_GROUP \
+    --name messaging-emulator \
+    --assign-endpoint true
+
+az spring app identity assign \
+    --service $SPRING_APPS_SERVICE \
+    --resource-group $RESOURCE_GROUP \
+    --name messaging-emulator \
+    --system-assigned
+
+MESSAGING_EMULATOR_ID=$(az spring app identity show \
+    --service $SPRING_APPS_SERVICE \
+    --resource-group $RESOURCE_GROUP \
+    --name messaging-emulator \
+    --output tsv \
+    --query principalId)
+
+az keyvault set-policy \
+    --name $KEYVAULT_NAME \
+    --resource-group $RESOURCE_GROUP \
+    --secret-permissions get list  \
+    --object-id $MESSAGING_EMULATOR_ID
+
+
+az spring app deploy --service $SPRING_APPS_SERVICE \
+    --resource-group $RESOURCE_GROUP \
+    --name messaging-emulator \
+    --no-wait \
+    --artifact-path spring-petclinic-messaging-emulator/target/spring-petclinic-messaging-emulator-2.6.11.jar \
+    --env SPRING_PROFILES_ACTIVE=mysql
+
+
+mvn package -DskipTests -rf :spring-petclinic-visits-service
+
+
+az spring app deploy --service $SPRING_APPS_SERVICE \
+                           --resource-group $RESOURCE_GROUP \
+                           --name visits-service \
+                           --no-wait \
+                           --artifact-path spring-petclinic-visits-service/target/spring-petclinic-visits-service-2.6.11.jar \
+                           --env SPRING_PROFILES_ACTIVE=mysql
+
+
+EVENTHUBS_NAMESPACE=evhns-springapps$UNIQUEID
+EVENTHUB_NAME=evh-telemetry
+RULE_NAME=listensendrule
+
+az eventhubs namespace create \
+  --resource-group $RESOURCE_GROUP \
+  --name $EVENTHUBS_NAMESPACE \
+  --location $LOCATION
+
+az eventhubs eventhub create \
+  --name $EVENTHUB_NAME \
+  --resource-group $RESOURCE_GROUP \
+  --namespace-name $EVENTHUBS_NAMESPACE
+
+az eventhubs eventhub authorization-rule create \
+  --resource-group $RESOURCE_GROUP \
+  --namespace-name $EVENTHUBS_NAMESPACE \
+  --eventhub-name $EVENTHUB_NAME \
+  --name $RULE_NAME \
+  --rights Listen Send
+
+EVENTHUB_CONNECTIONSTRING=$(az eventhubs eventhub authorization-rule keys list \
+    --resource-group $RESOURCE_GROUP \
+    --namespace-name $EVENTHUBS_NAMESPACE \
+    --eventhub-name $EVENTHUB_NAME \
+    --name $RULE_NAME \
+    --query primaryConnectionString \
+    --output tsv)
+
+echo $EVENTHUB_CONNECTIONSTRING
+
+vim secretfile.txt
+org.apache.kafka.common.security.plain.PlainLoginModule required username="$ConnectionString" password="XXXX"; 
+cat secretfile.txt
+
+
+
+git clone https://github.com/Azure/azure-event-hubs-for-kafka
+
+
+mvn clean package -DskipTests -rf :spring-petclinic-customers-service
+
+
+
+az spring app deploy \
+  --service $SPRING_APPS_SERVICE \
+  --resource-group $RESOURCE_GROUP \
+  --name customers-service \
+  --no-wait \
+  --artifact-path spring-petclinic-customers-service/target/spring-petclinic-customers-service-2.6.11.jar \
+  --env SPRING_PROFILES_ACTIVE=mysql
+
+
+cd ~/projects/azure-event-hubs-for-kafka/quickstart/java/producer
+mvn exec:java -Dexec.mainClass="TestProducer"
+
+
+az spring app logs -f --service $SPRING_APPS_SERVICE \
+    --resource-group $RESOURCE_GROUP \
+    --name customers-service
+
+VIRTUAL_NETWORK_NAME=vnet-petclinic
+az network vnet create --resource-group $RESOURCE_GROUP \
+    --name $VIRTUAL_NETWORK_NAME \
+    --location $LOCATION \
+    --address-prefix 10.1.0.0/16
+
+SERVICE_RUNTIME_SUBNET_CIDR=10.1.0.0/24
+APP_SUBNET_CIDR=10.1.1.0/24
+APPLICATION_GATEWAY_SUBNET_CIDR=10.1.2.0/24
+PRIVATE_ENDPOINTS_SUBNET_CIDR=10.1.3.0/24
+APPLICATION_GATEWAY_SUBNET_NAME=snet-app-gw
+PRIVATE_ENDPOINTS_SUBNET_NAME=snet-private-endpoints
+
+az network vnet subnet create --resource-group $RESOURCE_GROUP \
+    --vnet-name $VIRTUAL_NETWORK_NAME \
+    --address-prefixes $SERVICE_RUNTIME_SUBNET_CIDR \
+    --name service-runtime-subnet 
+
+az network vnet subnet create --resource-group $RESOURCE_GROUP \
+    --vnet-name $VIRTUAL_NETWORK_NAME \
+    --address-prefixes $APP_SUBNET_CIDR \
+    --name apps-subnet
+
+az network vnet subnet create \
+    --name $APPLICATION_GATEWAY_SUBNET_NAME \
+    --resource-group $RESOURCE_GROUP \
+    --vnet-name $VIRTUAL_NETWORK_NAME \
+    --address-prefix $APPLICATION_GATEWAY_SUBNET_CIDR
+
+az network vnet subnet create \
+    --name $PRIVATE_ENDPOINTS_SUBNET_NAME \
+    --resource-group $RESOURCE_GROUP \
+    --vnet-name $VIRTUAL_NETWORK_NAME \
+    --address-prefix $PRIVATE_ENDPOINTS_SUBNET_CIDR
+
+
+
+VIRTUAL_NETWORK_RESOURCE_ID=`az network vnet show \
+    --name $VIRTUAL_NETWORK_NAME \
+    --resource-group $RESOURCE_GROUP \
+    --query "id" \
+    --output tsv`
+
+export MSYS_NO_PATHCONV=1
+
+az role assignment create \
+    --role "Owner" \
+    --scope $VIRTUAL_NETWORK_RESOURCE_ID \
+    --assignee e8de9221-a19c-4c81-b814-fd37c6caf9d2
+
+
+az spring delete \
+    --name $SPRING_APPS_SERVICE \
+    --resource-group $RESOURCE_GROUP
+
+
+SPRING_APPS_SERVICE=asa-deployed-to-vnet$UNIQUEID
+az config set defaults.group=$RESOURCE_GROUP defaults.spring=$SPRING_APPS_SERVICE
+az spring create  \
+    --resource-group $RESOURCE_GROUP \
+    --name $SPRING_APPS_SERVICE \
+    --vnet $VIRTUAL_NETWORK_NAME \
+    --service-runtime-subnet service-runtime-subnet \
+    --app-subnet apps-subnet \
+    --sku standard \
+    --location $LOCATION
+
+az spring config-server git set \
+     --name $SPRING_APPS_SERVICE \
+     --resource-group $RESOURCE_GROUP \
+     --uri $GIT_REPO \
+     --label main \
+     --password $GH_PAT_FTA_CFG \
+     --username $GIT_USERNAME
+
+az spring app create --service $SPRING_APPS_SERVICE \
+                           --resource-group $RESOURCE_GROUP \
+                           --name api-gateway
+
+az spring app create --service $SPRING_APPS_SERVICE \
+                           --resource-group $RESOURCE_GROUP \
+                           --name admin-service
+                     
+az spring app create --service $SPRING_APPS_SERVICE \
+                           --resource-group $RESOURCE_GROUP \
+                           --name customers-service \
+                           --system-assigned
+
+az spring app create --service $SPRING_APPS_SERVICE \
+                           --resource-group $RESOURCE_GROUP \
+                           --name visits-service \
+                           --system-assigned
+
+az spring app create --service $SPRING_APPS_SERVICE \
+                           --resource-group $RESOURCE_GROUP \
+                           --name vets-service \
+                           --system-assigned
+
+
+CUSTOMERS_SERVICE_ID=$(az spring app identity show \
+    --service $SPRING_APPS_SERVICE \
+    --resource-group $RESOURCE_GROUP \
+    --name customers-service \
+    --output tsv \
+    --query principalId)
+
+az keyvault set-policy \
+    --name $KEYVAULT_NAME \
+    --resource-group $RESOURCE_GROUP \
+    --secret-permissions get list  \
+    --object-id $CUSTOMERS_SERVICE_ID
+
+VISITS_SERVICE_ID=$(az spring app identity show \
+    --service $SPRING_APPS_SERVICE \
+    --resource-group $RESOURCE_GROUP \
+    --name visits-service \
+    --output tsv \
+    --query principalId)
+
+az keyvault set-policy \
+    --name $KEYVAULT_NAME \
+    --resource-group $RESOURCE_GROUP \
+    --secret-permissions get list  \
+    --object-id $VISITS_SERVICE_ID
+
+VETS_SERVICE_ID=$(az spring app identity show \
+    --service $SPRING_APPS_SERVICE \
+    --resource-group $RESOURCE_GROUP \
+    --name vets-service \
+    --output tsv \
+    --query principalId)
+
+az keyvault set-policy \
+    --name $KEYVAULT_NAME \
+    --resource-group $RESOURCE_GROUP \
+    --secret-permissions get list  \
+    --object-id $VETS_SERVICE_ID
+
+
+
+az spring app deploy \
+     --service $SPRING_APPS_SERVICE \
+     --resource-group $RESOURCE_GROUP \
+     --name api-gateway \
+     --no-wait \
+     --artifact-path spring-petclinic-api-gateway/target/spring-petclinic-api-gateway-2.6.11.jar
+
+az spring app deploy \
+     --service $SPRING_APPS_SERVICE \
+     --resource-group $RESOURCE_GROUP \
+     --name admin-service \
+     --no-wait \
+     --artifact-path spring-petclinic-admin-server/target/spring-petclinic-admin-server-2.6.11.jar
+                     
+az spring app deploy \
+     --service $SPRING_APPS_SERVICE \
+     --resource-group $RESOURCE_GROUP \
+     --name customers-service \
+     --no-wait \
+     --artifact-path spring-petclinic-customers-service/target/spring-petclinic-customers-service-2.6.11.jar \
+     --env SPRING_PROFILES_ACTIVE=mysql
+
+az spring app deploy \
+     --service $SPRING_APPS_SERVICE \
+     --resource-group $RESOURCE_GROUP \
+     --name visits-service \
+     --no-wait \
+     --artifact-path spring-petclinic-visits-service/target/spring-petclinic-visits-service-2.6.11.jar \
+     --env SPRING_PROFILES_ACTIVE=mysql
+
+az spring app deploy \
+     --service $SPRING_APPS_SERVICE \
+     --resource-group $RESOURCE_GROUP \
+     --name vets-service \
+     --no-wait \
+     --artifact-path spring-petclinic-vets-service/target/spring-petclinic-vets-service-2.6.11.jar \
+     --env SPRING_PROFILES_ACTIVE=mysql
+
+
+
+SERVICE_RUNTIME_RG=`az spring show \
+    --resource-group $RESOURCE_GROUP \
+    --name $SPRING_APPS_SERVICE \
+    --query "properties.networkProfile.serviceRuntimeNetworkResourceGroup" \
+    --output tsv`
+
+IP_ADDRESS=`az network lb frontend-ip list \
+    --lb-name kubernetes-internal \
+    --resource-group $SERVICE_RUNTIME_RG \
+    --query "[0].privateIpAddress" \
+    --output tsv`
+
+az network private-dns zone create \
+    --resource-group $RESOURCE_GROUP \
+    --name private.azuremicroservices.io
+
+az network private-dns link vnet create \
+    --resource-group $RESOURCE_GROUP \
+    --name azure-spring-cloud-dns-link \
+    --zone-name private.azuremicroservices.io \
+    --virtual-network $VIRTUAL_NETWORK_NAME \
+    --registration-enabled false
+
+
+az network private-dns record-set a add-record \
+    --resource-group $RESOURCE_GROUP \
+    --zone-name private.azuremicroservices.io \
+    --record-set-name '*' \
+    --ipv4-address $IP_ADDRESS
+
+
+3 Private DNS-zones
+https://github.com/MicrosoftDocs/azure-docs/issues/100433
+https://github.com/MicrosoftDocs/azure-docs/issues/100431
+
+
+az spring app update \
+    --resource-group $RESOURCE_GROUP \
+    --name api-gateway \
+    --service $SPRING_APPS_SERVICE \
+    --assign-endpoint true
+
+az spring app update \
+    --resource-group $RESOURCE_GROUP \
+    --name admin-service \
+    --service $SPRING_APPS_SERVICE \
+    --assign-endpoint true
+
+
+az keyvault certificate get-default-policy > sample-policy.json
+
+
+
+DNS_LABEL=javagobigonazure
+DNS_NAME=petclinic.${DNS_LABEL}.com
+cat sample-policy.json | sed "s/myapp.mydomain.com/${DNS_NAME}/g" > result-policy.json
+
+
+cat result-policy.json
+
+CERT_NAME_IN_KV=openlab-certificate
+az keyvault certificate create \
+    --vault-name $KEYVAULT_NAME \
+    --name $CERT_NAME_IN_KV \
+    --policy @result-policy.json
+
+
+VAULTURI=$(az keyvault show -n $KEYVAULT_NAME -g $RESOURCE_GROUP --query properties.vaultUri -o tsv)
+
+// Check in Enterprise Application REMOVING ALL FILTERS / Azure Spring Cloud Domain-Management
+// https://ms.portal.azure.com/#view/Microsoft_AAD_IAM/ManagedAppMenuBlade/~/Overview/objectId/938df8e2-2b9d-40b1-940c-c75c33494239/appId/03b39d0f-4213-4864-a245-b1476ec03169
+ASCDM_OID=$(az ad sp show --id 03b39d0f-4213-4864-a245-b1476ec03169 --query id --output tsv)
+
+az keyvault set-policy -g $RESOURCE_GROUP -n $KEYVAULT_NAME  --object-id $ASCDM_OID --certificate-permissions get list --secret-permissions get list
+
+
+CERT_NAME_IN_ASC=openlab-certificate
+az spring certificate add \
+    --resource-group $RESOURCE_GROUP \
+    --service $SPRING_APPS_SERVICE \
+    --name $CERT_NAME_IN_ASC \
+    --vault-certificate-name $CERT_NAME_IN_KV \
+    --vault-uri $VAULTURI
+
+
+APPNAME=api-gateway
+az spring app custom-domain bind \
+    --resource-group $RESOURCE_GROUP \
+    --service $SPRING_APPS_SERVICE \
+    --domain-name $DNS_NAME \
+    --certificate $CERT_NAME_IN_ASC \
+    --app $APPNAME
+
+
+APPLICATION_GATEWAY_PUBLIC_IP_NAME=app-gw-openlab-public-ip
+az network public-ip create \
+    --resource-group $RESOURCE_GROUP \
+    --location $LOCATION \
+    --name $APPLICATION_GATEWAY_PUBLIC_IP_NAME \
+    --allocation-method Static \
+    --sku Standard \
+    --dns-name $DNS_LABEL
+
+APPGW_IDENTITY_NAME=msi-appgw-openlab
+az identity create \
+    --resource-group $RESOURCE_GROUP \
+    --name $APPGW_IDENTITY_NAME
+
+APPGW_IDENTITY_CLIENTID=$(az identity show --resource-group $RESOURCE_GROUP --name $APPGW_IDENTITY_NAME --query clientId --output tsv)
+APPGW_IDENTITY_OID=$(az ad sp show --id $APPGW_IDENTITY_CLIENTID --query id --output tsv)
+
+az keyvault set-policy \
+    --name $KEYVAULT_NAME \
+    --resource-group $RESOURCE_GROUP \
+    --object-id $APPGW_IDENTITY_OID \
+    --secret-permissions get list \
+    --certificate-permissions get list
+
+KEYVAULT_SECRET_ID_FOR_CERT=$(az keyvault certificate show --name $CERT_NAME_IN_KV --vault-name $KEYVAULT_NAME --query sid --output tsv)
+
+WAF_POLICY_NAME=openlabWAFPolicy
+az network application-gateway waf-policy create \
+    --name $WAF_POLICY_NAME \
+    --resource-group $RESOURCE_GROUP
+
+APPGW_NAME=appgw-openlab
+APPNAME=api-gateway
+SPRING_APP_PRIVATE_FQDN=${APPNAME}.private.azuremicroservices.io
+
+az network application-gateway create \
+    --name $APPGW_NAME \
+    --resource-group $RESOURCE_GROUP \
+    --location $LOCATION \
+    --capacity 2 \
+    --sku WAF_v2 \
+    --frontend-port 443 \
+    --http-settings-cookie-based-affinity Disabled \
+    --http-settings-port 443 \
+    --http-settings-protocol Https \
+    --public-ip-address $APPLICATION_GATEWAY_PUBLIC_IP_NAME \
+    --vnet-name $VIRTUAL_NETWORK_NAME \
+    --subnet $APPLICATION_GATEWAY_SUBNET_NAME \
+    --servers $SPRING_APP_PRIVATE_FQDN \
+    --key-vault-secret-id $KEYVAULT_SECRET_ID_FOR_CERT \
+    --identity $APPGW_IDENTITY_NAME \
+    --priority "1" \
+    --waf-policy $WAF_POLICY_NAME
+
+
+az keyvault certificate download \
+    --vault-name $KEYVAULT_NAME \
+    --name $CERT_NAME_IN_KV \
+    --file ./selfsignedcert.crt \
+    --encoding DER
+
+az network application-gateway root-cert create \
+    --resource-group $RESOURCE_GROUP \
+    --cert-file ./selfsignedcert.crt \
+    --gateway-name $APPGW_NAME \
+    --name MySelfSignedTrustedRootCert
+
+az network application-gateway http-settings update \
+    --resource-group $RESOURCE_GROUP \
+    --gateway-name $APPGW_NAME \
+    --host-name-from-backend-pool false \
+    --host-name $DNS_NAME \
+    --name appGatewayBackendHttpSettings \
+    --root-certs MySelfSignedTrustedRootCert
+
+az network application-gateway show-backend-health \
+    --name $APPGW_NAME \
+    --resource-group $RESOURCE_GROUP
+
+az network public-ip show \
+    --resource-group $RESOURCE_GROUP \
+    --name $APPLICATION_GATEWAY_PUBLIC_IP_NAME \
+    --query [ipAddress] \
+    --output tsv
+
+echo $DNS_NAME
+
+
+
+On you lab computer, open the file C:\Windows\System32\drivers\etc\hosts in Notepad using elevated privileges (as administrator) and add an extra line to the file that has the following content (replace the <app-gateway-ip-address> and <custom-dns-name> placeholders with the IP address and the DNS name you identified in the previous two steps):
+
+<app-gateway-ip-address>   <custom-dns-name>
+
+az network application-gateway waf-policy policy-setting update \
+    --mode Detection \
+    --policy-name $WAF_POLICY_NAME \
+    --resource-group $RESOURCE_GROUP \
+    --state Enabled
